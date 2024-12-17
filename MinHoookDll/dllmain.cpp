@@ -1,60 +1,103 @@
-// dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
-
+#include <windows.h>
 #include "MinHook.h"
+#include <iostream>
+#include "fileHandler.h"
 
+FileHandler logger;
+std::string LOG_FILE_PATH = ".\\log.txt";
 
+std::string convertLPCWSTRToString(LPCWSTR wideString) {
+    std::string narrowString;
+    while (*wideString) {
+        narrowString += static_cast<char>(*wideString); // Narrow each wide character
+        ++wideString;
+    }
+    return narrowString;
+}
 
-typedef DWORD(NTAPI* pNtDelayExecution)( // https://malapi.io/winapi/NtDelayExecution
-    IN BOOLEAN Alertable,
-    IN PLARGE_INTEGER DelayInterval
+// Typedef for the original CreateFileW function
+typedef HANDLE(WINAPI* CreateFileW_t)(
+    LPCWSTR lpFileName,
+    DWORD dwDesiredAccess,
+    DWORD dwShareMode,
+    LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+    DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes,
+    HANDLE hTemplateFile
     );
 
+// Original CreateFileW pointer
+CreateFileW_t fpCreateFileW = nullptr;
 
-extern pNtDelayExecution pOrigNtDelayExecution = (pNtDelayExecution)GetProcAddress(GetModuleHandle(L"ntdll.dll"), "NtDelayExecution");
-
-// our modified NtDelayExecution
-DWORD NTAPI NtDelayExecution(IN BOOLEAN Alertable, IN PLARGE_INTEGER DelayInterval)
+// Our hooked function
+HANDLE WINAPI HookedCreateFileW(
+    LPCWSTR lpFileName,
+    DWORD dwDesiredAccess,
+    DWORD dwShareMode,
+    LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+    DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes,
+    HANDLE hTemplateFile)
 {
-    // Mock this poor attempt >:)
-    MessageBoxA(0, "Feeling sleepy??", ":)", 0);
-
-
-    // Make it so NtDelayExecution actually gets called with a delay of 0, basically nullifying the sleep.
-    return pOrigNtDelayExecution(Alertable, (PLARGE_INTEGER)0);
-}
-
-
-DWORD WINAPI hook_thread(LPVOID lpReserved) {
-
-    MH_STATUS status = MH_CreateHookApi(TEXT("ntdll"), "NtDelayExecution", NtDelayExecution, reinterpret_cast<LPVOID*>(&pOrigNtDelayExecution));
-
-    // Enable hooks
-    status = MH_EnableHook(MH_ALL_HOOKS);
-    return status;
-}
-
-
-// main function of the dll
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
-{
-    switch (ul_reason_for_call)
+    // Check if the target file is ntdll.dll or kernel32.dll
+    if (lpFileName != nullptr)
     {
-    case DLL_PROCESS_ATTACH: {
+        if (wcsstr(lpFileName, L"ntdll.dll") || wcsstr(lpFileName, L"kernel32.dll"))
+        {
+            logger.log(LOG_FILE_PATH, "Suspicious File Access Detected!");
+            logger.log(LOG_FILE_PATH, "attempt to use CreateFileW on " + convertLPCWSTRToString(lpFileName));
+            // Optionally, block this behavior
+            return INVALID_HANDLE_VALUE;
+        }
+    }
 
-        // Initialize, and if that fails just return -1 aka ERROR
-        if (MH_Initialize() != MH_OK) return -1;
+    // Call the original CreateFileW function
+    return fpCreateFileW(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
+        dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+}
 
+// Function to set up hooks
+bool SetupHooks()
+{
+    // Initialize MinHook
+    if (MH_Initialize() != MH_OK)
+    {
+        return false;
+    }
+
+    // Create a hook for CreateFileW
+    if (MH_CreateHook(&CreateFileW, &HookedCreateFileW, reinterpret_cast<LPVOID*>(&fpCreateFileW)) != MH_OK)
+    {
+        return false;
+    }
+
+    // Enable the hook
+    if (MH_EnableHook(&CreateFileW) != MH_OK)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
+{
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
+    {
         DisableThreadLibraryCalls(hModule);
 
-        // Create hooked thread
-        HANDLE hThread = CreateThread(nullptr, 0, hook_thread, hModule, 0, nullptr);
+        // Setup hooks directly in DllMain
+        if (!SetupHooks())
+        {
+            MessageBoxW(nullptr, L"Failed to set up hooks!", L"Error", MB_ICONERROR);
+        }
     }
-    case DLL_THREAD_ATTACH:
-    case DLL_THREAD_DETACH:
-    case DLL_PROCESS_DETACH:
-        break;
+    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+    {
+        // Cleanup hooks
+        MH_DisableHook(&CreateFileW);
+        MH_Uninitialize();
     }
-
     return TRUE;
 }
