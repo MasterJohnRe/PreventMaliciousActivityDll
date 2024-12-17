@@ -1,15 +1,10 @@
-# Minhook simple dll attach example
+# PreventMaliciousActivityDll
 
-Based on https://shubakki.github.io/posts/2022/12/detecting-and-evading-sandboxing-through-time-based-evasion/
-
-Simple minhook example via run-time dynamic linking for fun and learning
+Simple minhook use to hook CreateFileW and check for it's use.
+prevents the use of this function on important system dlls e.g ntdll.dll, kernel32.dll.
+malicious softwares usually use this techniqe to map a syscall stub to the process virtual memory and use direct syscalls.
 
 ## How to Build/Compile
 
 - Visual studio 2022 and its workload Desktop development with C++ are requiere
 - https://github.com/TsudaKageyu/minhook I recommend installing it via vcpkg
-
-## Code structure
-
-- **MinHookClient** console win app that load the MinHoookDll
-- **MinHoookDll** dll that hooks NtDelayExecution on DLL_PROCESS_ATTACH
